@@ -103,7 +103,8 @@ summary.to.tibble <- function(CROSS, SCANONE, PERMS, ...) {
     object = SCANONE, 
     perms = PERMS,
     format = "tabByChr",
-    ci.function = "lodint",
+    ci.function = "bayesint",
+    prob = 0.9,
     ...
   ) 
   
@@ -332,7 +333,6 @@ Data that is goint to be used:
 
 1. Ionomics Data
 2. CML312 x W22 HUN mapping population genetic map
-
 ```{r}
 phenotypes_url <- "https://docs.google.com/spreadsheets/d/1zC8c44uLXKEccDdUKaMmhRGn0JU5wNt1iOYS1xmPWGs/edit#gid=1931442445"
 
@@ -352,12 +352,10 @@ gen_map <- gen_map_url %>%
 gen_map <- gen_map %>%
   mutate(id = ifelse(is.na(id), "", id))
 ```
-
 Transforming data:
 
 - Selecting ionomic phenotypes for leaf and seed
 - Declaring color scheme for HUN levels: hun (Non-Pikachu yellow) and wt (green).
-
 ```{r}
 
 ionomics_phenotypes <- ionomics_phenotypes_raw %>%
@@ -370,12 +368,10 @@ ionomics_phenotypes <- ionomics_phenotypes_raw %>%
 # Declaring color scheme for hun 
 hun_color_scheme <- c("HUN" = "#EDB120", "WT" = "#77AC30")
 ```
-
 First Look at data.
 
 1. Compare means of HUN and WT families using Kruskal-Wallis non parametric test for every ion and tissue.
 2. Make raincloud-plots by ion and tissue, and compare between medians using Kruskal-Wallis non parametric test.
-
 ```{r}
 # create directory for results
 dir.create(file.path(getwd(), "output"))
@@ -441,12 +437,10 @@ pdf("output/plots/rainclowd_plots/ions_raincloud_plots.pdf",
 walk(p, ~ print(.x))
 dev.off()
 ```
-
 Create CrossObject
 
 1. Create new traits: proportion between leaf/seed values
 2. Create CrossObject
-
 ```{r}
 
 # ion phenotypes
@@ -511,7 +505,6 @@ QTL analysis
 3. Identify covariate (genotype on marker 5_2269274)
 4. Calculate genoprob and simprob
 5. Scanone with an additive covariate model 
-
 ```{r}
 
 # Import CrossObject
@@ -600,7 +593,9 @@ summary(
   scanone.out.hk,
   perms = scanone.operm, 
   alpha = c(0.1), 
-  format= "tabByChr"
+  format= "tabByChr",
+  ci.function = "bayesint",
+  prob = 0.9
   ) 
 
 # transform the summary to tibble
@@ -618,28 +613,18 @@ write_csv(
 )
 
 # Create dataframe for lodplots
-ion_add_cov_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_crossobject_addcov.out.hk,
-  SUMMARY = scanone_summary_add_cov,
-  PERMS = ion_crossobject_addcov.operm,
+scanone_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.out.hk,
+  SUMMARY = summary_scanone,
+  PERMS = scanone.operm,
   alpha = 0.1,
   ci.funciton = "lodint"
   )
 
-# lodplots for all the phenotypes
-ion_add_cov_lodplots_all <- ion_add_cov_lodplot_df %>%
-  group_by(phenotype) %>%
-  nest %>%
-  mutate(
-    title = paste0(
-      "QTL analysis for additive covariate for ",
-      phenotype)) %>%
-  mutate(
-    plot = map2(
-      .x = data, 
-      .y = title,
-      .f = ~ .x %>% 
-        {
+scanone_all_plots <- function(data, title) {
+  
+  plot <- data %>%
+    {
         ggplot(
           data =., 
           aes(x = cM, 
@@ -671,70 +656,115 @@ ion_add_cov_lodplots_all <- ion_add_cov_lodplot_df %>%
             theme(
               panel.background = 
                 element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+                  fill = "white",
+                  colour = "grey50"
+                  ),
+              text = element_text(size = 20)) +
+            ggtitle(title)
+    }
+  return(plot)
+}
+
+# lodplots for all the phenotypes
+scanone_lodplot_all <- scanone_lodplot_df %>%
+  group_by(phenotype) %>%
+  nest %>%
+  mutate(
+    title = paste0(
+      "QTL analysis for simple scanone for ",
+      phenotype)) %>%
+  mutate(
+    plot = map2(
+      .x = data, 
+      .y = title,
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
 # # create directory for plots
-# dir.create(file.path(paste0(getwd(), "/output/plots"),
-#                      "scanone_lodplots"))
-p <- ion_add_cov_lodplots_all$plot
+dir.create(file.path(
+  paste0(getwd(), "/output/plots"),"scanone_lodplots")
+  )
+
+p <- scanone_lodplot_all$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_add_cov_lodplots_signif <- ion_add_cov_lodplots_all %>%
-  semi_join(scanone_summary_add_cov)
+scanone_lodplot_signif <- scanone_lodplot_all %>%
+  semi_join(summary_scanone)
 
-p <- ion_add_cov_lodplots_signif$plot
+p <- scanone_lodplot_signif$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
-# all significant plots in the same page
-ion_add_cov_lodplots_signif_single <- ion_add_cov_lodplots_signif %>%
-  select(phenotype, data) %>%
-  unnest(data) %>% {
+scanone_signif_single <- function(data, title) {
+  plot <- data %>% 
+    {
     ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
+           aes(x = cM, 
+               y = lod, 
+               group = interaction(chr, alpha)
+               )
+           ) +
+      geom_line(
+        size = 0.75, 
+        alpha = 0.3
+        ) +
+      geom_line(
+        aes(alpha = alpha),
+        size = 0.75
+                ) +
+      geom_ribbon(aes(ymin = 0,
+                      ymax = y), 
+                  fill = "red", 
+                  alpha = 0.8 
+                  ) +
+      geom_hline(aes(yintercept = threshold),
+                 color = "red",
                  linetype = 2) +
       scale_alpha_identity() +
       scale_x_continuous(name = "chr", 
                          breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks additive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+                         labels = unique(as.character((.$chr)))
+                         ) +
+      theme(panel.background = element_rect( fill = "white",
+                                             colour = "grey50")
+            ) +
+      ggtitle(title) +
+      facet_grid(phenotype ~ .)
+    }
+  return(plot)
+}
+
+# all significant plots in the same page
+scanone_lodplot_signif_single <- scanone_lodplot_signif %>%
+  select(phenotype, data) %>%
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks scanone"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_signif_single.pdf", 
-   plot = ion_add_cov_lodplots_signif_single, 
+     "output/plots/scanone_lodplots/scanone_lodplot_signif_single.pdf", 
+   plot = scanone_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
 ```
-
 QTL analysis with an additive covariate model
 ```{r}
 
@@ -795,16 +825,16 @@ write_csv(
 )
 
 # Create dataframe for lodplots
-ion_add_cov_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_crossobject_addcov.out.hk,
-  SUMMARY = scanone_summary_add_cov,
-  PERMS = ion_crossobject_addcov.operm,
+scanone.addcov_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.addcov.out.hk,
+  SUMMARY = summary_scanone.addcov,
+  PERMS = scanone.addcov.operm,
   alpha = 0.1,
   ci.funciton = "lodint"
   )
 
 # lodplots for all the phenotypes
-ion_add_cov_lodplots_all <- ion_add_cov_lodplot_df %>%
+scanone.addcov_lodplot_all <- scanone.addcov_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
   mutate(
@@ -815,98 +845,46 @@ ion_add_cov_lodplots_all <- ion_add_cov_lodplot_df %>%
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ .x %>% 
-        {
-        ggplot(
-          data =., 
-          aes(x = cM, 
-              y = lod, 
-              group = interaction(chr, alpha)
-          )
-          ) +
-            geom_line(size = 0.75, alpha = 0.3) +
-          geom_line(
-            aes(alpha = alpha),
-            size = 0.75
-            ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
-          scale_alpha_identity() +
-          scale_x_continuous(
-            name = "chr", 
-            breaks = unique(.$breaks), 
-            labels = unique(as.character((.$chr)))
-            ) +
-            theme(
-              panel.background = 
-                element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
-# # create directory for plots
-# dir.create(file.path(paste0(getwd(), "/output/plots"),
-#                      "scanone_lodplots"))
-p <- ion_add_cov_lodplots_all$plot
+p <- scanone.addcov_lodplot_all$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_add_cov_lodplots_signif <- ion_add_cov_lodplots_all %>%
-  semi_join(scanone_summary_add_cov)
+scanone.addcov_lodplot_signif <- scanone.addcov_lodplot_all %>%
+  semi_join(summary_scanone.addcov)
 
-p <- ion_add_cov_lodplots_signif$plot
+p <- scanone.addcov_lodplot_signif$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # all significant plots in the same page
-ion_add_cov_lodplots_signif_single <- ion_add_cov_lodplots_signif %>%
+scanone.addcov_lodplot_signif_single <- scanone.addcov_lodplot_signif %>%
   select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks additive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks additive covariate"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_add_cov_lodplots_signif_single.pdf", 
-   plot = ion_add_cov_lodplots_signif_single, 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif_single.pdf", 
+   plot = scanone.addcov_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
@@ -954,154 +932,90 @@ summary(
   )
 
 # transform the summary to tibble
-summary_scanone.addcov.both <- summary.to.tibble(
+summary_scanone.addboth <- summary.to.tibble(
   CROSS = ion_crossobject, 
   SCANONE = scanone.addboth.out.hk,
   PERMS = scanone.addboth.operm, 
   alpha = 0.1
   )
 
-plot(
-  scanone.out.hk,
-  scanone.addcov.out.hk, 
-  col = c("blue", "red"), 
-  lty= 1:2,
-  ylab = "LOD score",
-  lodcolumn = 4)
-
-
 # Export the summary as a csv
 write_csv(
-  scanone_summary_int_add_cov,
-  "output/tables/scanone_summary/summary_scanone.addcov.both.csv"
+  summary_scanone.addboth,
+  "output/tables/scanone_summary/summary_scanone.addboth.csv"
 )
 
-ions_interesting_qtl_addint <- scanone_summary_int_add_cov %>%
-  arrange(phenotype) %>%
-  separate(phenotype, into = c("phenotype2", "model"), sep = "\\.",
-           remove = F) %>%
-  group_by(phenotype2, chr) %>%
-  filter(dplyr::n() != 1)
+# QTLs significant for both scanone and additive covar model
+scanone.addcov.both_interesting <- summary_scanone.addcov.both %>%
+  separate(phenotype, into = c("phenotype", "covar"), sep = "\\.") %>%
+  group_by(phenotype, chr) %>%
+  filter(n() ==2) %>%
+  ungroup
 
 # Create dataframe for lodplots
-ion_int_add_cov_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_int_add.out.hk,
-  SUMMARY = scanone_summary_int_add_cov,
-  PERMS = ion_int_add.operm,
+scanone.addboth_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.addboth.out.hk,
+  SUMMARY = summary_scanone.addboth,
+  PERMS = scanone.addboth.operm,
   alpha = 0.1,
   ci.funciton = "lodint"
   )
 
 # lodplots for all the phenotypes
-ion_int_add_cov_lodplots_all <- ion_int_add_cov_lodplot_df %>%
+scanone.addboth_lodplot_all <- scanone.addboth_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
-  arrange(phenotype) %>%
   mutate(
     title = paste0(
-      "QTL analysis for int_additive covariate for ",
+      "QTL analysis for additive covariate for ",
       phenotype)) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ .x %>% 
-        {
-        ggplot(
-          data =., 
-          aes(x = cM, 
-              y = lod, 
-              group = interaction(chr, alpha)
-          )
-          ) +
-            geom_line(size = 0.75, alpha = 0.3) +
-          geom_line(
-            aes(alpha = alpha),
-            size = 0.75
-            ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
-          scale_alpha_identity() +
-          scale_x_continuous(
-            name = "chr", 
-            breaks = unique(.$breaks), 
-            labels = unique(as.character((.$chr)))
-            ) +
-            theme(
-              panel.background = 
-                element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
+p <- scanone.addcov_lodplot_all$plot
 
-p <- ion_int_add_cov_lodplots_all$plot
-
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_int_add_cov_lodplots_signif <- ion_int_add_cov_lodplots_all %>%
-  semi_join(scanone_summary_int_add_cov)
+scanone.addcov_lodplot_signif <- scanone.addcov_lodplot_all %>%
+  semi_join(summary_scanone.addcov)
 
-p <- ion_int_add_cov_lodplots_signif$plot
+p <- scanone.addcov_lodplot_signif$plot
 
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
-
 # all significant plots in the same page
-
-ion_int_add_cov_lodplots_interesting <- ion_int_add_cov_lodplots_all %>%
-  semi_join(ions_interesting_qtl_addint) %>%
+scanone.addcov_lodplot_signif_single <- scanone.addcov_lodplot_signif %>%
   select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks int_additive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks additive covariate"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_interesting.pdf", 
-   plot = ion_int_add_cov_lodplots_interesting, 
+     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif_single.pdf", 
+   plot = scanone.addcov_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
-
 
 ```
 
@@ -1286,7 +1200,542 @@ ggsave(
 )
 ```
 
+Additive and Interactive models comparison
 
+```{r}
+# Comparing models and looking for evidence for interaction between QTLs and HUN covariate
+
+# scanone
+scanone.intboth.out.hk <- c(
+  scanone.intcov.out.hk,
+  scanone.intcov.out.hk - scanone.addboth.out.hk,
+  labels = c("f", "i")
+)
+
+# save scanone
+save(
+  list = c("scanone.intboth.out.hk"), 
+  file = "output/qtl_objects/scanone/ion_int_add.out.hk.RData"
+)
+
+# permutations
+scanone.intboth.operm <- cbind(
+  scanone.intcov.operm,
+  scanone.intcov.operm - scanone.addcov.operm,
+  labels = c("f", "i")
+)
+
+# save permutation test
+save(
+  list = c("scanone.intboth.operm"), 
+  file = "output/qtl_objects/permutations/scanone.intboth.operm.RData"
+)
+
+# load("output/qtl_objects/permutations/ion_int_add.operm.RData")
+
+# Summary
+summary(
+  scanone.intboth.out.hk, 
+  perms = scanone.intboth.operm, 
+  alpha = c(0.05), 
+  format = "tabByChr"
+  )
+
+# transform the summary to tibble
+summary_scanone.intcov.both <- summary.to.tibble(
+  CROSS = ion_crossobject, 
+  SCANONE = scanone.intboth.out.hk,
+  PERMS = scanone.intboth.operm, 
+  alpha = 0.05
+  )
+
+# Export the summary as a csv
+write_csv(
+  summary_scanone.intcov.both,
+  "output/tables/scanone_summary/summary_scanone.intcov.both.csv"
+)
+
+ions_interesting_qtl_addint <- scanone_summary_int_add_cov %>%
+  arrange(phenotype) %>%
+  separate(phenotype, into = c("phenotype2", "model"), sep = "\\.",
+           remove = F) %>%
+  group_by(phenotype2, chr) %>%
+  filter(dplyr::n() != 1)
+
+# Create dataframe for lodplots
+ion_int_add_cov_lodplot_df <- lodplot_map_df(
+  SCANONE = ion_int_add.out.hk,
+  SUMMARY = scanone_summary_int_add_cov,
+  PERMS = ion_int_add.operm,
+  alpha = 0.1,
+  ci.funciton = "lodint"
+  )
+
+# lodplots for all the phenotypes
+ion_int_add_cov_lodplots_all <- ion_int_add_cov_lodplot_df %>%
+  group_by(phenotype) %>%
+  nest %>%
+  arrange(phenotype) %>%
+  mutate(
+    title = paste0(
+      "QTL analysis for int_additive covariate for ",
+      phenotype)) %>%
+  mutate(
+    plot = map2(
+      .x = data, 
+      .y = title,
+      .f = ~ .x %>% 
+        {
+        ggplot(
+          data =., 
+          aes(x = cM, 
+              y = lod, 
+              group = interaction(chr, alpha)
+          )
+          ) +
+            geom_line(size = 0.75, alpha = 0.3) +
+          geom_line(
+            aes(alpha = alpha),
+            size = 0.75
+            ) +
+          geom_ribbon(
+            aes(ymin = 0, ymax = y), 
+            fill = "red", 
+            alpha = 0.8
+            ) +
+          geom_hline( 
+            aes(yintercept = unique(threshold)),
+            color = "red",
+            linetype = 2
+            ) +
+          scale_alpha_identity() +
+          scale_x_continuous(
+            name = "chr", 
+            breaks = unique(.$breaks), 
+            labels = unique(as.character((.$chr)))
+            ) +
+            theme(
+              panel.background = 
+                element_rect(
+                fill = "white",
+                colour = "grey50")) +
+            ggtitle(.y)
+      }
+    )
+  ) 
+
+p <- ion_int_add_cov_lodplots_all$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_all.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# Only significant plots
+ion_int_add_cov_lodplots_signif <- ion_int_add_cov_lodplots_all %>%
+  semi_join(scanone_summary_int_add_cov)
+
+p <- ion_int_add_cov_lodplots_signif$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_signif.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# all significant plots in the same page
+ion_int_add_cov_lodplots_interesting <- ion_int_add_cov_lodplots_all %>%
+  semi_join(ions_interesting_qtl_addint) %>%
+  select(phenotype, data) %>%
+  unnest(data) %>% {
+    ggplot(data =., 
+           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
+      geom_line(size = 0.75, alpha = 0.3) +
+      geom_line(aes(alpha = alpha), size = 0.75) +
+      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
+      geom_hline(aes(yintercept = threshold), color = "red",
+                 linetype = 2) +
+      scale_alpha_identity() +
+      scale_x_continuous(name = "chr", 
+                         breaks = unique(.$breaks),
+                         labels = unique(as.character((.$chr)))) +
+  theme(panel.background = element_rect( fill = "white",
+                                         colour = "grey50")) +
+  ggtitle("QTL analysis sig peaks int_additive covariate") +
+  facet_grid(phenotype ~ .)
+      }
+
+ggsave(
+   filename =
+     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_interesting.pdf", 
+   plot = ion_int_add_cov_lodplots_interesting, 
+   width = 15, 
+   height = 18
+)
+
+```
+
+Separate analysis on WT families
+
+```{r}
+################################
+# Analysis on WT families ONLY #
+################################
+
+ion_crossobject_WT <- subset(ion_crossobject, ind  = hun_cov == 0)
+
+# scanone for wt individuals
+scanone.WT.out.hk <- 
+  scanone(ion_crossobject_WT,
+          method = "hk",
+          pheno.col = ion_pheno.col$pheno.col
+          )
+
+# save scanone
+save(
+  list = c("scanone.WT.out.hk"), 
+  file = "output/qtl_objects/scanone/scanone.WT.out.hk.RData"
+)
+
+# Permutation test (1000 permutations) subsetting for wt individuals
+scanone.WT.operm <- 
+  scanone(ion_crossobject_WT,
+          method = "hk",
+          pheno.col = ion_pheno.col$pheno.col, 
+          n.perm = 1000
+          )
+
+# save permutation test
+save(
+  list = c("scanone.WT.operm"), 
+  file = "output/qtl_objects/permutations/scanone.WT.operm.RData"
+)
+
+load("output/qtl_objects/permutations/scanone.WT.operm")
+
+# Summary, alpha = 0.05
+summary(
+  scanone.WT.out.hk,
+  perms = scanone.WT.operm,
+  alpha = c(0.1), 
+  format= "tabByChr"
+  ) 
+
+# transform the summary to tibble
+summary_scanone.WT <- summary.to.tibble(
+  CROSS = ion_crossobject_WT, 
+  SCANONE = scanone.WT.out.hk,
+  PERMS = scanone.WT.operm, 
+  alpha = 0.1
+  )
+
+# Export the summary as a csv
+write_csv(
+  summary_scanone.WT,
+  "output/tables/scanone_summary/summary_scanone.WT.csv"
+)
+
+# Create dataframe for lodplots
+ion_WT_lodplot_df <- lodplot_map_df(
+  SCANONE = ion_crossobject_WT.out.hk,
+  SUMMARY = scanone_summary_WT,
+  PERMS = ion_crossobject_WT.operm,
+  alpha = 0.1,
+  )
+
+# lodplots for all the phenotypes
+ion_WT_lodplots_all <- ion_WT_lodplot_df %>%
+  group_by(phenotype) %>%
+  nest %>%
+  arrange(phenotype) %>%
+  mutate(
+    title = paste0(
+      "QTL analysis for int_additive covariate for ",
+      phenotype)) %>%
+  mutate(
+    plot = map2(
+      .x = data, 
+      .y = title,
+      .f = ~ .x %>% 
+        {
+        ggplot(
+          data =., 
+          aes(x = cM, 
+              y = lod, 
+              group = interaction(chr, alpha)
+          )
+          ) +
+            geom_line(size = 0.75, alpha = 0.3) +
+          geom_line(
+            aes(alpha = alpha),
+            size = 0.75
+            ) +
+          geom_ribbon(
+            aes(ymin = 0, ymax = y), 
+            fill = "red", 
+            alpha = 0.8
+            ) +
+          geom_hline( 
+            aes(yintercept = unique(threshold)),
+            color = "red",
+            linetype = 2
+            ) +
+          scale_alpha_identity() +
+          scale_x_continuous(
+            name = "chr", 
+            breaks = unique(.$breaks), 
+            labels = unique(as.character((.$chr)))
+            ) +
+            theme(
+              panel.background = 
+                element_rect(
+                fill = "white",
+                colour = "grey50")) +
+            ggtitle(.y)
+      }
+    )
+  ) 
+
+p <- ion_WT_lodplots_all$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_WT_lodplots_all.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# Only significant plots
+ion_WT_lodplots_signif <- ion_WT_lodplots_all %>%
+  semi_join(scanone_summary_WT)
+
+p <- ion_WT_lodplots_signif$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_WT_lodplots_signif.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# all significant plots in the same page
+
+ion_WT_lodplots_signif_single <- ion_WT_lodplots_all %>%
+  semi_join(scanone_summary_WT) %>%
+  select(phenotype, data) %>%
+  unnest(data) %>% {
+    ggplot(data =., 
+           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
+      geom_line(size = 0.75, alpha = 0.3) +
+      geom_line(aes(alpha = alpha), size = 0.75) +
+      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
+      geom_hline(aes(yintercept = threshold), color = "red",
+                 linetype = 2) +
+      scale_alpha_identity() +
+      scale_x_continuous(name = "chr", 
+                         breaks = unique(.$breaks),
+                         labels = unique(as.character((.$chr)))) +
+  theme(panel.background = element_rect( fill = "white",
+                                         colour = "grey50")) +
+  ggtitle("QTL analysis sig peaks int_additive covariate") +
+  facet_grid(phenotype ~ .)
+      }
+
+ggsave(
+   filename =
+     "output/plots/scanone_lodplots/ion_WT_lodplots_signif_single.pdf", 
+   plot = ion_WT_lodplots_signif_single, 
+   width = 15, 
+   height = 18
+)
+
+```
+
+Separate analysis on HUN families
+
+```{r}
+
+#################################
+# Analysis on HUN families ONLY #
+#################################
+ion_crossobject_HUN <- subset(ion_crossobject, ind  = hun_cov == 1)
+
+# scanone for HUN individuals
+scanone.HUN.out.hk <- 
+  scanone(ion_crossobject_HUN,
+          method = "hk",
+          pheno.col = ion_pheno.col$pheno.col
+          )
+
+# save scanone
+save(
+  list = c("scanone.HUN.out.hk"), 
+  file = "output/qtl_objects/scanone/scanone.HUN.out.hk.RData"
+)
+
+# Permutation test (1000 permutations) subsetting for HUN individuals
+scanone.HUN.operm <- 
+  scanone(ion_crossobject_HUN,
+          method = "hk",
+          pheno.col = ion_pheno.col$pheno.col, 
+          n.perm = 1000
+          )
+
+# save permutation test
+save(
+  list = c("scanone.HUN.operm"), 
+  file = "output/qtl_objects/permutations/scanone.HUN.operm.RData"
+)
+
+load(file = "output/qtl_objects/permutations/ion_crossobject_HUN.operm.RData")
+
+# Summary, alpha = 0.05
+summary(
+  scanone.HUN.out.hk,
+  perms = scanone.HUN.operm,
+  alpha = c(0.1), 
+  format= "tabByChr"
+  ) 
+
+# transform the summary to tibble
+summary_scanone.HUN <- summary.to.tibble(
+  CROSS = ion_crossobject_HUN, 
+  SCANONE = scanone.HUN.out.hk,
+  PERMS = scanone.HUN.operm, 
+  alpha = 0.1
+  )
+
+# Export the summary as a csv
+write_csv(
+  summary_scanone.HUN,
+  "output/tables/scanone_summary/summary_scanone.HUN"
+)
+
+# Create dataframe for lodplots
+ion_HUN_lodplot_df <- lodplot_map_df(
+  SCANONE = ion_crossobject_HUN.out.hk,
+  SUMMARY = scanone_summary_HUN,
+  PERMS = ion_crossobject_HUN.operm,
+  alpha = 0.1,
+  )
+
+# lodplots for all the phenotypes
+ion_HUN_lodplots_all <- ion_HUN_lodplot_df %>%
+  group_by(phenotype) %>%
+  nest %>%
+  arrange(phenotype) %>%
+  mutate(
+    title = paste0(
+      "QTL analysis for int_additive covariate for ",
+      phenotype)) %>%
+  mutate(
+    plot = map2(
+      .x = data, 
+      .y = title,
+      .f = ~ .x %>% 
+        {
+        ggplot(
+          data =., 
+          aes(x = cM, 
+              y = lod, 
+              group = interaction(chr, alpha)
+          )
+          ) +
+            geom_line(size = 0.75, alpha = 0.3) +
+          geom_line(
+            aes(alpha = alpha),
+            size = 0.75
+            ) +
+          geom_ribbon(
+            aes(ymin = 0, ymax = y), 
+            fill = "red", 
+            alpha = 0.8
+            ) +
+          geom_hline( 
+            aes(yintercept = unique(threshold)),
+            color = "red",
+            linetype = 2
+            ) +
+          scale_alpha_identity() +
+          scale_x_continuous(
+            name = "chr", 
+            breaks = unique(.$breaks), 
+            labels = unique(as.character((.$chr)))
+            ) +
+            theme(
+              panel.background = 
+                element_rect(
+                fill = "white",
+                colour = "grey50")) +
+            ggtitle(.y)
+      }
+    )
+  ) 
+
+
+p <- ion_HUN_lodplots_all$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_HUN_lodplots_all.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# Only significant plots
+ion_HUN_lodplots_signif <- ion_HUN_lodplots_all %>%
+  semi_join(scanone_summary_HUN)
+
+p <- ion_HUN_lodplots_signif$plot
+
+# Saving plots int_addo a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/ion_HUN_lodplots_signif.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# all significant plots in the same page
+
+ion_HUN_lodplots_signif <- ion_HUN_lodplots_all %>%
+  semi_join(ion_HUN_lodplots_signif) %>%
+  select(phenotype, data) %>%
+  unnest(data) %>% {
+    ggplot(data =., 
+           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
+      geom_line(size = 0.75, alpha = 0.3) +
+      geom_line(aes(alpha = alpha), size = 0.75) +
+      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
+      geom_hline(aes(yintercept = threshold), color = "red",
+                 linetype = 2) +
+      scale_alpha_identity() +
+      scale_x_continuous(name = "chr", 
+                         breaks = unique(.$breaks),
+                         labels = unique(as.character((.$chr)))) +
+  theme(panel.background = element_rect( fill = "white",
+                                         colour = "grey50")) +
+  ggtitle("QTL analysis sig peaks int_additive covariate") +
+  facet_grid(phenotype ~ .)
+      }
+
+ggsave(
+   filename =
+     "output/plots/scanone_lodplots/ion_HUN_lodplots_signif.pdf", 
+   plot = ion_HUN_lodplots_signif, 
+   width = 15, 
+   height = 18
+)
+
+```
 
 ```{r}
 ```
