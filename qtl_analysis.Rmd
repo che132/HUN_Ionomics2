@@ -590,10 +590,10 @@ scanone.operm <-
 # save permutation test
 save(
   list = c("scanone.operm"), 
-  file = "output/qtl_objects/permutations/ion_crossobject_addcov.operm.RData"
+  file = "output/qtl_objects/permutations/scanone.operm.RData"
 )
 
-load("output/qtl_objects/permutations/ion_crossobject_addcov.operm.RData")
+# load("output/qtl_objects/permutations/ion_crossobject_addcov.operm.RData")
 
 # Summary, alpha = 0.05
 summary(
@@ -767,8 +767,8 @@ scanone.addcov.operm <-
           )
 # save permutation test
 save(
-  list = c("ion_crossobject_addcov.operm"), 
-  file = "output/qtl_objects/permutations/ion_crossobject_addcov.operm.RData"
+  list = c("scanone.addcov.operm"), 
+  file = "output/qtl_objects/permutations/scanone.addcov.operm.RData"
 )
 
 load("output/qtl_objects/permutations/ion_crossobject_addcov.operm.RData")
