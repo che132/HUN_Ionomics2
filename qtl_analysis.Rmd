@@ -20,6 +20,7 @@ library(googledrive)
 library(qtl)
 library(broom)
 library(pals)
+library(patchwork)
 
 # Set the seed as the same value as previous analysis
 set.seed(54955149)
@@ -338,6 +339,8 @@ phenotypes_url <- "https://docs.google.com/spreadsheets/d/1zC8c44uLXKEccDdUKaMmh
 
 gen_map_url <- "https://docs.google.com/spreadsheets/d/1Abx_s6XxjG91YlLIaFxNn4HNcbnA3lKRgR0jw2DZZek/edit#gid=1187220000"
 
+phenotypes_all_url <- "https://docs.google.com/spreadsheets/d/1agklzlH0HWUT5Axyf-yTKsuk88F--Mt0dLB4xAZqXIM/edit#gid=1931442445"
+
 # Importing lsmeans from the sheets document
 ionomics_phenotypes_raw <- phenotypes_url %>%
   as_id %>%
@@ -351,6 +354,13 @@ gen_map <- gen_map_url %>%
 
 gen_map <- gen_map %>%
   mutate(id = ifelse(is.na(id), "", id))
+
+ionomics_phenotypes_raw_non_ion <- phenotypes_all_url %>%
+  as_id %>%
+  range_read(., na = "NA") %>%
+  rename(id = GEN, hun = HUN)
+
+
 ```
 Transforming data:
 
@@ -358,7 +368,7 @@ Transforming data:
 - Declaring color scheme for HUN levels: hun (Non-Pikachu yellow) and wt (green).
 ```{r}
 
-ionomics_phenotypes <- ionomics_phenotypes_raw %>%
+ionomics_phenotypes <- ionomics_phenotypes_raw_all %>%
   filter(id != "ARES") %>%
   pivot_longer(-c(id, hun)) %>%
   mutate(name = gsub("\\.SR", "", name)) %>%
@@ -551,9 +561,7 @@ ion_crossobject <- sim.geno(
   error.prob = 0.001
   )
 ```
-
 QTL analysis using scanone without covariates
-
 ```{r}
 ######################################################
 # Using scanone applying an additive covariate model #
@@ -889,9 +897,7 @@ ggsave(
    height = 18
 )
 ```
-
 Assessing the evidence of additive effect of the covariate
-
 ```{r}
 # Comparing models and looking for evidence for the effect of hun as an additive covariate
 
@@ -946,81 +952,82 @@ write_csv(
 )
 
 # QTLs significant for both scanone and additive covar model
-scanone.addcov.both_interesting <- summary_scanone.addcov.both %>%
+scanone.addcov.both_interesting <- summary_scanone.addboth %>%
   separate(phenotype, into = c("phenotype", "covar"), sep = "\\.") %>%
   group_by(phenotype, chr) %>%
   filter(n() ==2) %>%
   ungroup
 
-# Create dataframe for lodplots
-scanone.addboth_lodplot_df <- lodplot_map_df(
-  SCANONE = scanone.addboth.out.hk,
-  SUMMARY = summary_scanone.addboth,
-  PERMS = scanone.addboth.operm,
-  alpha = 0.1,
-  ci.funciton = "lodint"
-  )
+write_csv(
+  summary_scanone.addboth,
+  "output/tables/scanone_summary/scanone.addcov.both_interesting.csv"
+)
+
+scanone_all_plots_interesting <- function(data, title) {
+  
+  plot <- data %>%
+    {
+      ggplot(
+          data =., 
+          aes(x = cM, 
+              y = lod, 
+              color = model,
+              group = interaction(chr, alpha, model)
+          )
+          ) +
+            geom_line(size = 0.75, alpha = 0.3) +
+          geom_line(
+            aes(alpha = alpha),
+            size = 0.75
+            ) +
+          scale_alpha_identity() +
+          scale_x_continuous(
+            name = "chr", 
+            breaks = unique(.$breaks), 
+            labels = unique(as.character((.$chr)))
+            ) +
+            theme(
+              panel.background = 
+                element_rect(
+                  fill = "white",
+                  colour = "grey50"
+                  ),
+              text = element_text(size = 20)) +
+            ggtitle(title)
+    }
+  return(plot)
+}
 
 # lodplots for all the phenotypes
-scanone.addboth_lodplot_all <- scanone.addboth_lodplot_df %>%
+scanone.addboth_lodplot_interesting <-bind_rows(
+  scanone_lodplot_df %>% mutate(model = "scanone"),
+  scanone.addcov_lodplot_df %>% mutate(model = "add")
+  ) %>%
+  semi_join(scanone.addcov.both_interesting, by = "phenotype") %>%
   group_by(phenotype) %>%
   nest %>%
   mutate(
-    title = paste0(
-      "QTL analysis for additive covariate for ",
-      phenotype)) %>%
+    title = 
+      paste0("QTLs significant for adboth model for ", phenotype)
+  ) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ scanone_all_plots(.x, .y)
-    ))
+      .f = ~ scanone_all_plots_interesting(.x, .y)
+    )) 
 
 p <- scanone.addcov_lodplot_all$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/scanone.addcov_lodplot_all.pdf", 
-   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+     "output/plots/scanone_lodplots/scanone.addboth_lodplot_interesting.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow = 1, ncol = 1), 
    width = 15, height = 9
 )
-
-# Only significant plots
-scanone.addcov_lodplot_signif <- scanone.addcov_lodplot_all %>%
-  semi_join(summary_scanone.addcov)
-
-p <- scanone.addcov_lodplot_signif$plot
-
-# Saving plots into a single pdf
-ggsave(
-   filename = 
-     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif.pdf", 
-   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
-   width = 15, height = 9
-)
-
-# all significant plots in the same page
-scanone.addcov_lodplot_signif_single <- scanone.addcov_lodplot_signif %>%
-  select(phenotype, data) %>%
-  unnest(data) %>% 
-  scanone_signif_single(
-    data = .,
-    title = "QTL analysis sig peaks additive covariate"
-  )
-
-ggsave(
-   filename =
-     "output/plots/scanone_lodplots/scanone.addcov_lodplot_signif_single.pdf", 
-   plot = scanone.addcov_lodplot_signif_single, 
-   width = 15, 
-   height = 18
-)
-
 ```
-
 QTL analysis with an interactive covariate model
-
 ```{r}
 ##################################################
 # Using scanone aplying an interactive covariate #
@@ -1058,7 +1065,7 @@ save(
   file = "output/qtl_objects/permutations/scanone.intcov.operm.RData"
 )
 
-load("output/qtl_objects/permutations/scanone.intcov.operm")
+load("output/qtl_objects/permutations/scanone.intcov.operm.RData")
 
 # Summary 
 summary(
@@ -1083,132 +1090,78 @@ write_csv(
 )
 
 # Create dataframe for lodplots
-ion_int_cov_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_crossobject_intcov.out.hk,
-  SUMMARY = scanone_summary_int_cov,
-  PERMS = ion_crossobject_intcov.operm,
+scanone.intcov_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.intcov.out.hk,
+  SUMMARY = summary_scanone.intcov,
+  PERMS = scanone.intcov.operm,
   alpha = 0.1,
   ci.funciton = "lodint"
   )
 
 # lodplots for all the phenotypes
-ion_int_cov_lodplots_all <- ion_int_cov_lodplot_df %>%
+scanone.intcov_lodplot_all <- scanone.intcov_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
   mutate(
     title = paste0(
-      "QTL analysis for intitive covariate for ",
+      "QTL analysis for additive covariate for ",
       phenotype)) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ .x %>% 
-        {
-        ggplot(
-          data =., 
-          aes(x = cM, 
-              y = lod, 
-              group = interaction(chr, alpha)
-          )
-          ) +
-            geom_line(size = 0.75, alpha = 0.3) +
-          geom_line(
-            aes(alpha = alpha),
-            size = 0.75
-            ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
-          scale_alpha_identity() +
-          scale_x_continuous(
-            name = "chr", 
-            breaks = unique(.$breaks), 
-            labels = unique(as.character((.$chr)))
-            ) +
-            theme(
-              panel.background = 
-                element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
-# create directory for plots
-dir.create(file.path(paste0(getwd(), "/output/plots"),
-                     "scanone_lodplots"))
-p <- ion_int_cov_lodplots_all$plot
+p <- scanone.intcov_lodplot_all$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_cov_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone.intcov_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_int_cov_lodplots_signif <- ion_int_cov_lodplots_all %>%
-  semi_join(scanone_summary_int_cov)
+scanone.intcov_lodplot_signif <- scanone.intcov_lodplot_all %>%
+  semi_join(summary_scanone.intcov)
 
-p <- ion_int_cov_lodplots_signif$plot
+p <- scanone.intcov_lodplot_signif$plot
 
 # Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_cov_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone.intcov_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # all significant plots in the same page
-ion_int_cov_lodplots_signif_single <- ion_int_cov_lodplots_signif %>%
+scanone.intcov_lodplot_signif_single <- scanone.intcov_lodplot_signif %>%
   select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks intitive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks interactive covariate"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_int_cov_lodplots_signif_single.pdf", 
-   plot = ion_int_cov_lodplots_signif_single, 
+     "output/plots/scanone_lodplots/scanone.intcov_lodplot_signif_single.pdf", 
+   plot = scanone.intcov_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
 ```
-
 Additive and Interactive models comparison
-
 ```{r}
 # Comparing models and looking for evidence for interaction between QTLs and HUN covariate
 
 # scanone
 scanone.intboth.out.hk <- c(
   scanone.intcov.out.hk,
-  scanone.intcov.out.hk - scanone.addboth.out.hk,
+  scanone.intcov.out.hk - scanone.addcov.out.hk,
   labels = c("f", "i")
 )
 
@@ -1242,7 +1195,7 @@ summary(
   )
 
 # transform the summary to tibble
-summary_scanone.intcov.both <- summary.to.tibble(
+summary_scanone.intboth <- summary.to.tibble(
   CROSS = ion_crossobject, 
   SCANONE = scanone.intboth.out.hk,
   PERMS = scanone.intboth.operm, 
@@ -1251,137 +1204,91 @@ summary_scanone.intcov.both <- summary.to.tibble(
 
 # Export the summary as a csv
 write_csv(
-  summary_scanone.intcov.both,
-  "output/tables/scanone_summary/summary_scanone.intcov.both.csv"
+  summary_scanone.intboth,
+  "output/tables/scanone_summary/summary_scanone.intboth.csv"
 )
 
-ions_interesting_qtl_addint <- scanone_summary_int_add_cov %>%
-  arrange(phenotype) %>%
-  separate(phenotype, into = c("phenotype2", "model"), sep = "\\.",
-           remove = F) %>%
-  group_by(phenotype2, chr) %>%
-  filter(dplyr::n() != 1)
+summary_scanone.intboth_interesting <- summary_scanone.intboth %>%
+  separate(phenotype, into = c("phenotype", "model"), sep = "\\.") %>%
+  group_by(phenotype, chr) %>%
+  filter(n() == 2) %>%
+  arrange(phenotype, model) %>%
+  filter(phenotype != "Ni_seed")
+
+# Export the summary as a csv
+write_csv(
+  summary_scanone.intboth_interesting,
+  "output/tables/scanone_summary/summary_scanone.intboth_interesting.csv"
+)
 
 # Create dataframe for lodplots
-ion_int_add_cov_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_int_add.out.hk,
-  SUMMARY = scanone_summary_int_add_cov,
-  PERMS = ion_int_add.operm,
+scanone.intboth_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.intboth.out.hk,
+  SUMMARY = summary_scanone.intboth,
+  PERMS = scanone.intboth.operm,
   alpha = 0.1,
   ci.funciton = "lodint"
-  )
+  ) %>%
+  filter(grepl("\\.i$", phenotype))
 
 # lodplots for all the phenotypes
-ion_int_add_cov_lodplots_all <- ion_int_add_cov_lodplot_df %>%
+scanone.intboth_lodplot_all <- scanone.intboth_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
-  arrange(phenotype) %>%
   mutate(
     title = paste0(
-      "QTL analysis for int_additive covariate for ",
+      "QTL analysis for evidence of hun:QTL interaction for ",
       phenotype)) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ .x %>% 
-        {
-        ggplot(
-          data =., 
-          aes(x = cM, 
-              y = lod, 
-              group = interaction(chr, alpha)
-          )
-          ) +
-            geom_line(size = 0.75, alpha = 0.3) +
-          geom_line(
-            aes(alpha = alpha),
-            size = 0.75
-            ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
-          scale_alpha_identity() +
-          scale_x_continuous(
-            name = "chr", 
-            breaks = unique(.$breaks), 
-            labels = unique(as.character((.$chr)))
-            ) +
-            theme(
-              panel.background = 
-                element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
-p <- ion_int_add_cov_lodplots_all$plot
+p <- scanone.intboth_lodplot_all$plot
 
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone.intboth_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_int_add_cov_lodplots_signif <- ion_int_add_cov_lodplots_all %>%
-  semi_join(scanone_summary_int_add_cov)
+scanone.intboth_lodplot_signif <- scanone.intboth_lodplot_all %>%
+  semi_join(summary_scanone.intboth)
 
-p <- ion_int_add_cov_lodplots_signif$plot
+p <- scanone.intboth_lodplot_signif$plot
 
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone.intboth_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # all significant plots in the same page
-ion_int_add_cov_lodplots_interesting <- ion_int_add_cov_lodplots_all %>%
-  semi_join(ions_interesting_qtl_addint) %>%
+scanone.intboth_lodplot_signif_single <- 
+  scanone.intboth_lodplot_signif %>%
   select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks int_additive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks evidence of hun:QTL interaction"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_int_add_cov_lodplots_interesting.pdf", 
-   plot = ion_int_add_cov_lodplots_interesting, 
+     "output/plots/scanone_lodplots/scanone.intboth_lodplot_signif_single.pdf", 
+   plot = scanone.intboth_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
-
 ```
-
 Separate analysis on WT families
-
 ```{r}
 ################################
 # Analysis on WT families ONLY #
@@ -1395,6 +1302,8 @@ scanone.WT.out.hk <-
           method = "hk",
           pheno.col = ion_pheno.col$pheno.col
           )
+
+load("output/qtl_objects/scanone/scanone.WT.out.hk.RData")
 
 # save scanone
 save(
@@ -1416,7 +1325,7 @@ save(
   file = "output/qtl_objects/permutations/scanone.WT.operm.RData"
 )
 
-load("output/qtl_objects/permutations/scanone.WT.operm")
+load("output/qtl_objects/permutations/scanone.WT.operm.RData")
 
 # Summary, alpha = 0.05
 summary(
@@ -1441,125 +1350,71 @@ write_csv(
 )
 
 # Create dataframe for lodplots
-ion_WT_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_crossobject_WT.out.hk,
-  SUMMARY = scanone_summary_WT,
-  PERMS = ion_crossobject_WT.operm,
+scanone.WT_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.WT.out.hk,
+  SUMMARY = summary_scanone.WT,
+  PERMS = scanone.WT.operm,
   alpha = 0.1,
+  ci.funciton = "lodint"
   )
 
 # lodplots for all the phenotypes
-ion_WT_lodplots_all <- ion_WT_lodplot_df %>%
+scanone.WT_lodplot_all <- scanone.WT_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
-  arrange(phenotype) %>%
   mutate(
     title = paste0(
-      "QTL analysis for int_additive covariate for ",
+      "QTL analysis for WT families only for ",
       phenotype)) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
-      .f = ~ .x %>% 
-        {
-        ggplot(
-          data =., 
-          aes(x = cM, 
-              y = lod, 
-              group = interaction(chr, alpha)
-          )
-          ) +
-            geom_line(size = 0.75, alpha = 0.3) +
-          geom_line(
-            aes(alpha = alpha),
-            size = 0.75
-            ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
-          scale_alpha_identity() +
-          scale_x_continuous(
-            name = "chr", 
-            breaks = unique(.$breaks), 
-            labels = unique(as.character((.$chr)))
-            ) +
-            theme(
-              panel.background = 
-                element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
-      }
-    )
-  ) 
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
 
-p <- ion_WT_lodplots_all$plot
+p <- scanone.WT_lodplot_all$plot
 
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_WT_lodplots_all.pdf", 
+     "output/plots/scanone_lodplots/scanone.WT_lodplot_all.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # Only significant plots
-ion_WT_lodplots_signif <- ion_WT_lodplots_all %>%
-  semi_join(scanone_summary_WT)
+scanone.WT_lodplot_signif <- scanone.WT_lodplot_all %>%
+  semi_join(summary_scanone.WT)
 
-p <- ion_WT_lodplots_signif$plot
+p <- scanone.WT_lodplot_signif$plot
 
-# Saving plots int_addo a single pdf
+# Saving plots into a single pdf
 ggsave(
    filename = 
-     "output/plots/scanone_lodplots/ion_WT_lodplots_signif.pdf", 
+     "output/plots/scanone_lodplots/scanone.WT_lodplot_signif.pdf", 
    plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
    width = 15, height = 9
 )
 
 # all significant plots in the same page
-
-ion_WT_lodplots_signif_single <- ion_WT_lodplots_all %>%
-  semi_join(scanone_summary_WT) %>%
+scanone.WT_lodplot_signif_single <- scanone.WT_lodplot_signif %>%
   select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks int_additive covariate") +
-  facet_grid(phenotype ~ .)
-      }
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks WT families only"
+  )
 
 ggsave(
    filename =
-     "output/plots/scanone_lodplots/ion_WT_lodplots_signif_single.pdf", 
-   plot = ion_WT_lodplots_signif_single, 
+     "output/plots/scanone_lodplots/scanone.WT_lodplot_signif_single.pdf", 
+   plot = scanone.WT_lodplot_signif_single, 
    width = 15, 
    height = 18
 )
-
 ```
-
 Separate analysis on HUN families
-
 ```{r}
 
 #################################
@@ -1580,6 +1435,8 @@ save(
   file = "output/qtl_objects/scanone/scanone.HUN.out.hk.RData"
 )
 
+load("output/qtl_objects/scanone/scanone.HUN.out.hk.RData")
+
 # Permutation test (1000 permutations) subsetting for HUN individuals
 scanone.HUN.operm <- 
   scanone(ion_crossobject_HUN,
@@ -1594,7 +1451,7 @@ save(
   file = "output/qtl_objects/permutations/scanone.HUN.operm.RData"
 )
 
-load(file = "output/qtl_objects/permutations/ion_crossobject_HUN.operm.RData")
+load(file = "output/qtl_objects/permutations/scanone.HUN.operm.RData")
 
 # Summary, alpha = 0.05
 summary(
@@ -1619,33 +1476,725 @@ write_csv(
 )
 
 # Create dataframe for lodplots
-ion_HUN_lodplot_df <- lodplot_map_df(
-  SCANONE = ion_crossobject_HUN.out.hk,
-  SUMMARY = scanone_summary_HUN,
-  PERMS = ion_crossobject_HUN.operm,
+scanone.HUN_lodplot_df <- lodplot_map_df(
+  SCANONE = scanone.HUN.out.hk,
+  SUMMARY = summary_scanone.HUN,
+  PERMS = scanone.HUN.operm,
   alpha = 0.1,
+  ci.funciton = "lodint"
   )
 
 # lodplots for all the phenotypes
-ion_HUN_lodplots_all <- ion_HUN_lodplot_df %>%
+scanone.HUN_lodplot_all <- scanone.HUN_lodplot_df %>%
   group_by(phenotype) %>%
   nest %>%
-  arrange(phenotype) %>%
   mutate(
     title = paste0(
-      "QTL analysis for int_additive covariate for ",
+      "QTL analysis for HUN families only for ",
       phenotype)) %>%
   mutate(
     plot = map2(
       .x = data, 
       .y = title,
+      .f = ~ scanone_all_plots(.x, .y)
+    ))
+
+p <- scanone.HUN_lodplot_all$plot
+
+# Saving plots into a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/scanone.HUN_lodplot_all.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# Only significant plots
+scanone.HUN_lodplot_signif <- scanone.HUN_lodplot_all %>%
+  semi_join(summary_scanone.HUN)
+
+p <- scanone.HUN_lodplot_signif$plot
+
+# Saving plots into a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/scanone.HUN_lodplot_signif.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
+   width = 15, height = 9
+)
+
+# all significant plots in the same page
+scanone.HUN_lodplot_signif_single <- scanone.HUN_lodplot_signif %>%
+  select(phenotype, data) %>%
+  unnest(data) %>% 
+  scanone_signif_single(
+    data = .,
+    title = "QTL analysis sig peaks HUN families only"
+  )
+
+ggsave(
+   filename =
+     "output/plots/scanone_lodplots/scanone.HUN_lodplot_signif_single.pdf", 
+   plot = scanone.HUN_lodplot_signif_single, 
+   width = 15, 
+   height = 18
+)
+
+```
+Summary of all qtls detected
+```{r}
+
+summary_all_QTLs <- bind_rows(
+  summary_scanone %>% mutate(model = "scanone"),
+  summary_scanone.addcov %>% mutate(model = "addcov"),
+  summary_scanone.intcov %>% mutate(model = "intcov"),
+  summary_scanone.intboth %>% mutate(model = "intevidence"),
+  summary_scanone.WT %>% mutate(model = "WT"),
+  summary_scanone.HUN %>% mutate(model = "HUN")
+  ) %>%
+  filter(!(model == "intevidence" & grepl("\\.f$", phenotype))) %>%
+  mutate(phenotype = ifelse(
+    grepl("\\.i$", phenotype),
+    gsub("\\.i$", "", phenotype),
+    phenotype
+    ))
+
+lodplot_all_df <- bind_rows(
+  scanone_lodplot_df %>% mutate(model = "scanone"),
+  scanone.addcov_lodplot_df %>% mutate(model = "addcov"),
+  scanone.intcov_lodplot_df %>% mutate(model = "intcov"),
+  scanone.intboth_lodplot_df %>% mutate(model = "intevidence"),
+  scanone.WT_lodplot_df %>% mutate(model = "WT"),
+  scanone.HUN_lodplot_df %>% mutate(model = "HUN")
+  ) %>%
+  filter(!(model == "intevidence" & grepl("\\.f$", phenotype))) %>%
+  mutate(phenotype = ifelse(
+    grepl("\\.i$", phenotype),
+    gsub("\\.i$", "", phenotype),
+    phenotype
+    ))
+
+model_color_scheme <- 
+  c(
+    "HUN" = "#E41A1C", "WT" = "#000083", "scanone" = "#4DAF4A",
+    "addcov" = "#984EA3", "intcov" = "#FF7F00", "intevidence" = "black"
+    ) %>%
+  enframe(name = "model", value = "color") %>%
+  mutate(color = as_factor(color))
+  
+lodplots_all_models <-  function(data, title) {
+  
+  plot <- data %>% 
+    {
+      ggplot(
+        data =., 
+        aes(x = cM, 
+            y = lod, 
+            group = interaction(chr, model),
+            color = color)
+        ) +
+        geom_line(
+          alpha = 0.25, 
+          size = 0.75
+          ) +
+        geom_line(
+          aes(alpha = alpha), 
+          size = 0.75
+          ) +
+        scale_alpha_identity() +
+        scale_x_continuous(
+          name = NULL, 
+          breaks = unique(.$breaks), 
+          labels = unique(as.character((.$chr)))
+          ) +
+        theme(
+          panel.background = 
+            element_rect(
+              fill = "white",
+              colour = "grey50"
+              ),
+          text = element_text(size = 20),
+          legend.position = "top",
+          plot.title = element_text(hjust = 0.5)) +
+        scale_color_identity(
+          guide = "legend",
+          name = "model",
+          breaks = levels(.$color),
+          label = levels(.$model)
+        ) +
+        ggtitle(title)
+    }
+  return(plot)
+  }
+
+lodplots_model_comparisson <- lodplot_all_df %>%
+  mutate(breaks = round(breaks, 4)) %>%
+  left_join(model_color_scheme) %>%
+  mutate(model = factor(
+    model,
+    levels =  c("HUN", "WT", "scanone", "addcov", "intcov",
+                "intevidence"))) %>%
+  semi_join(summary_all_QTLs, by = c("model")) %>%
+  group_by(phenotype) %>%
+  nest %>%
+  mutate(title = paste0("All LOD plots for ", phenotype)) %>%
+  mutate(data = map(
+    .x = data,
+    .f = ~ .x %>% droplevels())) %>%
+  mutate(plot = map2(
+    .x = data, 
+    .y = title,
+    .f = ~ lodplots_all_models(.x, .y)
+    )) 
+
+p <- lodplots_model_comparisson$plot
+
+# Saving plots into a single pdf
+ggsave(
+   filename = 
+     "output/plots/scanone_lodplots/lodplots_model_comparisson.pdf", 
+   plot = gridExtra::marrangeGrob(p, nrow = 1, ncol = 1), 
+   width = 15, height = 9
+)
+
+```
+
+Collapsing QTLs detected in different models into a single range using genomic ranges 
+
+```{r}
+
+interval_granges_list_df <- summary_all_QTLs %>%
+  select(seqnames = chr, 
+         start = ci.low, 
+         end = ci.high,
+         phenotype, 
+         model)  %>%
+  arrange(phenotype, seqnames) %>%
+  group_by(phenotype, seqnames) %>%
+  filter(n() != 1) %>%
+  arrange(phenotype) %>%
+  mutate(group = cur_group_id()) 
+
+interval_granges_list <- interval_granges_list_df %>%
+  group_split() %>%
+  map(.x =., 
+      .f = ~ plyranges::as_granges(.x)) %>%
+  GRangesList
+
+reduced_intervals <- interval_granges_list %>%
+  GenomicRanges::reduce(.) %>%
+  as_tibble 
+
+reduced_intervals_info <- interval_granges_list_df %>%
+  left_join(
+    reduced_intervals,
+    by = c("group", "seqnames")
+    ) %>%
+  group_by(seqnames, phenotype, group) %>%
+  select(chr = seqnames, phenotype, group, start.y, end.y, width) %>%
+  distinct %>%
+  ungroup %>%
+  left_join(summary_all_QTLs) %>%
+  group_by(group) %>%
+  filter(lod == max(lod)) 
+
+qtl_detected_all_reduced <- summary_all_QTLs %>%
+  anti_join(reduced_intervals_info, by = c("chr", "phenotype")) %>%
+  arrange(phenotype, chr) %>% 
+  bind_rows(reduced_intervals_info) %>%
+  left_join(summary_scanone.intboth_interesting %>% 
+              select(phenotype, chr, model) %>%
+              rename(model2 = model)) %>%
+    mutate(int = ifelse(!is.na(model2), T, F)) %>%
+    select(-model2) %>%
+  arrange(phenotype, chr) %>%
+  distinct
+
+```
+
+Evaluating multi-QTL models
+
+```{r}
+
+hun <- data.frame(hun = hun_cov)
+
+prepare_fitqtl_df1 <- function(qtls_df) {
+  pfitqtldf1 <- qtls_df %>%
+    mutate(pos = round(pos,0)) %>%
+    arrange(phenotype, chr) %>%
+    group_by(phenotype) %>%
+    mutate(id = as.character(row_number()),
+           term = ifelse(int == F,
+                         paste("Q", id, sep =""),
+                         paste("hun*Q", id, sep = ""))) %>%
+    left_join(ion_pheno.col) %>%
+    mutate(chr = as.integer(chr)) %>%
+    ungroup
+    
+    return(pfitqtldf1)
+}
+
+prepare_makeqtl <- function(qtls_df, CROSS) {
+  pfitqtldf1 <- qtls_df %>%
+    group_by(phenotype) %>%
+    summarise(
+      chr = list(chr), 
+      pos = list(pos),
+      formula = paste0("y ~ ", paste(term, collapse = "+")),
+      formula = paste0(formula, "+hun"),
+      pheno.col = dplyr::first(pheno.col)
+      ) %>%
+    mutate(qtl_model = pmap(
+      .l = .,
+      .f = ~ with (
+        list(...),
+        makeqtl(
+          cross = CROSS,
+          chr = chr,
+          pos = pos,
+          what = "prob"
+      ))))
+    
+    return(pfitqtldf1)
+}
+
+prepare_refqtl <- function(qtls_df, CROSS) {
+  pfitqtldf1 <- qtls_df %>%
+    mutate(refqtl = 
+      pmap(
+        .l = .,
+        .f = ~ with(
+          list(...),
+          refineqtl(
+            cross = ion_crossobject,
+            method = "hk",
+            pheno.col =pheno.col,
+            qtl = qtl_model,
+            formula = formula,
+            covar = hun,
+            incl.markers = T)
+          ))
+      )
+  return(pfitqtldf1)
+}
+
+evaluate_fitqtl <- function(qtls_df, CROSS) {
+  
+  e_fitqtl_df <- qtls_df %>%
+      mutate(fit_qtl = pmap(
+      .l = .,
+      .f = ~ with (
+        list(...),
+        fitqtl(
+          cross = CROSS,
+          pheno.col = pheno.col,
+          qtl = refqtl,
+          formula = formula, 
+          covar = hun,
+          method = "hk"
+          
+        )
+      )))
+    
+  return(e_fitqtl_df)
+}
+
+qtl_fullmodel_df <- function(data) {
+  
+  fmdf <- data %>%
+  select(phenotype, refqtl, fit_qtl) %>%
+  mutate(
+    formula = map_chr(
+      .x = fit_qtl,
+      .f = ~ .x  %>% attr(., "formula")),
+    resultados = map(
+      .x = fit_qtl,
       .f = ~ .x %>% 
-        {
+        .$result.full %>%
+        as_tibble(., rownames = "term"))) %>%
+  unnest(resultados) %>%
+  filter(term == "Model") %>%
+  mutate(term = "Full Model",
+         qtl = map(.x = refqtl, .f = ~ .x$name )) %>%
+  mutate(qtl = ifelse(formula == "y ~ Q1", qtl, "Full Model")) %>%
+  unnest(qtl) %>%
+  select(-c(refqtl, fit_qtl)) %>%
+  dplyr::rename(
+    p.Chi2 = `Pvalue(Chi2)`,
+    p.F = `Pvalue(F)`
+    ) %>%
+  mutate(
+    s.Chi2 = p.value_to_ast(p.Chi2),
+    s.F = p.value_to_ast(p.F),
+    ) %>%
+  select(phenotype, formula, term, qtl, df, SS, MS, LOD, `%var`,
+         contains(".Chi2"), contains(".F")) %>%
+  mutate(across( c(df:`%var`), ~ round(., 2)),
+         across(c(p.Chi2, p.F), 
+                ~ formatC(., format = "e", digits = 2)))
+  
+  return(fmdf)
+}
+
+qtl_dropone_df <- function(data) {
+  
+  dodf <- data %>%
+    select(phenotype, fit_qtl)  %>%
+  mutate(
+    formula = map_chr(
+      .x = fit_qtl,
+      .f = ~ .x  %>% attr(., "formula")),
+    resultados = map(
+      .x = fit_qtl,
+      .f = ~ .x %>% .$result.drop %>% as_tibble(., rownames = "qtl")),
+    formulas = map(
+      .x = fit_qtl,
+      .f = ~ .x %>% .$result.drop %>% attr(., "formulas"))) %>%
+  unnest(c(resultados, formulas)) %>%
+  mutate(term = map2_chr(
+    .x = formula,
+    .y = formulas,
+    .f = ~ Reduce(
+      setdiff,
+      strsplit(c(.x, .y), split = " ")
+      ) %>% .[[1]]
+    )) %>%
+  select(-fit_qtl) %>%
+  dplyr::rename(
+    p.Chi2 = `Pvalue(Chi2)`,
+    p.F = `Pvalue(F)`) %>%
+  mutate(
+    s.Chi2 = p.value_to_ast(p.Chi2),
+    s.F = p.value_to_ast(p.F),
+    term = ifelse(term == "+", "Q1", term)
+    ) %>%
+  select(phenotype, formula, term, qtl, df:`%var`, contains(".Chi2"),
+         contains(".F")) %>%
+  mutate(across( c(df:`%var`),
+                 ~ round(., 2)),
+         across(c(p.Chi2, p.F), 
+                ~ formatC(., format = "e", digits = 2)
+                )
+         ) 
+  return(dodf)
+  
+}
+
+bayes_int_refineqtl <- function(refqtl, qtl.index, CROSS ) {
+  
+  bie <- refqtl
+  
+  # Note: change the probablities to prob = 0.9
+  
+  bayes_df <- bie %>%
+  bayesint(.,
+           qtl.index = qtl.index, 
+           prob = 0.9,
+           expandtomarkers = F
+           ) %>%
+  as_tibble(rownames = "marker") %>% 
+  mutate(n = row_number()) %>%
+  filter(n == min(n) | n == round(median(n),0) | n == max(n)) %>% 
+  select(-n) %>%
+  mutate(marker = pmap_chr(
+    .l = ., 
+    .f = ~ with(
+      list(...),
+      ifelse(
+        !grepl("^(\\d+)\\_", marker),
+        find.marker(chr = chr, pos = pos, cross = ion_crossobject),
+        marker
+        )
+      )
+    )) %>%
+  bind_cols(
+    ., 
+    tibble(
+      gen = c("ci.low", "pos", "ci.high"),
+      phys = c("p_pos_l", "p_pos", "p_pos_h"),
+      LOD = c("lod_low", "lod", "lod_high")
+      )
+    ) %>%
+  pivot_wider(names_from = gen, values_from = pos) %>%
+  pivot_wider(names_from = phys, values_from = marker) %>%
+  pivot_wider(names_from = LOD, values_from = lod) %>%
+  summarise_all(.funs = list(~na.omit(.))) %>%
+  mutate(across(
+    where(is.character), 
+    ~ round(as.double(gsub("^(\\d+)\\_", "", .))/1e6, 2)
+    )) %>%
+  mutate(interval = p_pos_h - p_pos_l) %>%
+  distinct() %>%
+  select(-chr, -lod_low, -lod_high) 
+  
+  return(bayes_df)
+}
+
+
+multiqtl_refqtl <- qtl_detected_all_reduced %>%
+  prepare_fitqtl_df1 %>%
+  prepare_makeqtl(., ion_crossobject) %>%
+  prepare_refqtl
+
+multiqtl_fitqtl <- multiqtl_refqtl %>%
+  evaluate_fitqtl(., ion_crossobject)
+
+multiqtl_fitqtl_results <- bind_rows(
+  multiqtl_fitqtl %>% qtl_fullmodel_df,
+  multiqtl_fitqtl %>% qtl_dropone_df
+  ) %>% 
+  arrange(phenotype, term) 
+
+ns_fullmodel_multiqtl <- multiqtl_fitqtl_results %>%
+  filter(term == "Full Model") %>%
+  filter(s.Chi2 == "NS" | s.F == "NS") %>%
+  select(phenotype, formula, term, LOD, `%var`, contains("s."))
+
+ns_terms_multiqtl <- multiqtl_fitqtl_results %>%
+  anti_join(ns_fullmodel_multiqtl, by = "phenotype") %>%
+  filter(term != "Full Model") %>%
+  filter(s.Chi2 == "NS" | s.F == "NS") %>%
+  select(phenotype, formula, term, qtl, LOD, `%var`, contains("s.")) %>%
+  separate(qtl, into = c("chr", "pos"), sep = "@", remove = F) %>% 
+  mutate(chr = gsub("hun(\\:)?", "", chr) %>% trimws)
+
+ns_qtl_multiqtl <- ns_terms_multiqtl %>%
+  filter(!grepl("hun(\\:)?", qtl)) 
+
+ns_int_multiqtl <- ns_terms_multiqtl %>%
+  filter(grepl("hun\\:", qtl)) %>%
+  select(phenotype, chr, term)
+
+# Re-evaluate the models without significant phenotypes, qtls and hun:qtl interactions
+
+multiqtl_refqtl2 <- qtl_detected_all_reduced %>%
+  # remove Non-significant phenotypes
+  anti_join(ns_fullmodel_multiqtl, by = c("phenotype")) %>%
+  # remove non-significant QTLs
+  anti_join(ns_qtl_multiqtl, by = c("phenotype", "chr")) %>%
+  # remove non-significant interactions 
+  left_join(ns_int_multiqtl) %>%
+  mutate(int = ifelse(!is.na(term), !int, int)) %>%
+  select(-term) %>%
+  prepare_fitqtl_df1 %>%
+  prepare_makeqtl(., ion_crossobject) %>%
+  prepare_refqtl
+
+multiqtl_fitqtl2 <- multiqtl_refqtl2 %>%
+  evaluate_fitqtl(., ion_crossobject)
+
+#################################
+# Final multi-qtl model results #
+#################################
+multiqtl_fitqtl_results2 <- bind_rows(
+  multiqtl_fitqtl2 %>% qtl_fullmodel_df,
+  multiqtl_fitqtl2 %>% qtl_dropone_df
+  ) %>% 
+  arrange(phenotype, term) 
+
+write_csv(multiqtl_fitqtl_results2, 
+          paste0(getwd(),
+                 "/output/tables/multiqtl_fitqtl_results.csv"
+                 )
+)
+# Bar plot of the variance explained by the components of the multi-QTL models
+var_explained_barplot <- multiqtl_fitqtl_results2 %>%
+  filter(term != "Full Model") %>%
+  select(phenotype, qtl, var = `%var`) %>%
+  mutate(type = ifelse(grepl("@", qtl), "QTL", qtl)) %>%
+  group_by(phenotype, type) %>%
+  summarise(var = sum(var)) %>%
+  ungroup %>%
+  mutate(type = factor(type, levels = c("QTL", "hun"))) %>%
+  ggplot(data = ., 
+         aes(
+           x = phenotype,
+           y = var,
+           fill = type
+         )) +
+  geom_col() +
+  scale_fill_manual(
+    guide = "legend",
+    name = "Component",
+    values = c("#000080", "#EDB120"),
+    breaks = c("QTL", "hun"),
+    labels = c("QTL additive effect", "HUN")
+    ) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "top",
+    axis.text.x = element_text(angle = 90, vjust = 0.5),
+    panel.background = element_rect(
+          fill = "white", 
+          colour ="grey50"
+          ),
+    text = element_text(size = 20)
+  ) +
+  xlab(NULL) +
+  ylab("Variance explained (%)") +
+  ggtitle("variance explained by the components of the multi-QTL models")
+
+dir.create(file.path(paste0(getwd(), "/output"), "fitqtl_results"))
+
+
+multiqtl_fitqtl_bayesint <- multiqtl_fitqtl2 %>% 
+  select(phenotype, refqtl) %>%
+  mutate(QTL = map(.x = refqtl, .f = ~ .x$altname),
+         name = map(.x = refqtl, .f = ~ .x$name)) %>%
+  unnest(c(QTL, name)) %>%
+  group_by(phenotype) %>%
+  mutate(qtl_index = row_number()) %>%
+  ungroup %>%
+  mutate(bayes_int = pmap(
+    .l = ., 
+    .f = ~ with(
+      list(...),
+      bayes_int_refineqtl(
+        refqtl = refqtl, 
+        qtl.index = qtl_index,
+        CROSS = ion_crossobject)
+      )
+    )) %>%
+  select(-refqtl) %>%
+  unnest(bayes_int)
+
+
+multiqtl_fitqtl_bayesint2 <- multiqtl_fitqtl2 %>%
+  select(phenotype:pheno.col) %>%
+  mutate(
+    qtl_model = pmap(
+      .l =.,
+      .f = ~ with(
+        list(...),
+        makeqtl(
+          cross = ion_crossobject,
+          chr = chr, 
+          pos = pos, 
+          what = "draws"
+        ))
+      )
+  ) %>%
+  mutate(
+    refqtl = pmap(
+      .l = .,
+      .f = ~ with(
+        list(...),
+        refineqtl(cross = ion_crossobject,
+                  pheno.col = pheno.col,
+                  qtl = qtl_model,
+                  covar = hun,
+                  method = "imp")
+      ))
+  )
+    
+
+multiqtl_fitqtl_bayesint2_2 <- multiqtl_fitqtl_bayesint2 %>%
+  select(phenotype, refqtl) %>%
+  mutate(QTL = map(.x = refqtl, .f = ~ .x$altname),
+         name = map(.x = refqtl, .f = ~ .x$name)) %>%
+  unnest(c(QTL, name)) %>%
+  group_by(phenotype) %>%
+  mutate(qtl_index = row_number()) %>%
+  ungroup %>%
+  mutate(bayes_int = pmap(
+    .l = ., 
+    .f = ~ with(
+      list(...),
+      bayes_int_refineqtl(
+        refqtl = refqtl, 
+        qtl.index = qtl_index,
+        CROSS = ion_crossobject)
+      )
+    )) %>%
+  select(-refqtl) %>%
+  unnest(bayes_int)
+
+multiqtl_summary_QTL_all <- multiqtl_fitqtl_bayesint %>%
+  dplyr::rename(qtl = name) %>%
+  mutate(label = qtl) %>%
+  left_join(
+    multiqtl_fitqtl_results2, 
+    by = c("phenotype", "qtl")
+    ) %>% 
+  separate(qtl, into = c("chr", NA), sep = "@") %>%
+  mutate(chr = as.integer(chr)) %>%
+  select(phenotype, label, chr, lod, var = `%var`, sig = s.Chi2,
+         pos, ci.low, ci.high, p_pos, p_ci.low = p_pos_l,
+         p_ci.high = p_pos_h,interval)
+
+write_csv(multiqtl_summary_QTL_all, 
+          paste0(getwd(),
+                 "/output/tables/multiqtl_summary_QTL_all.csv"
+                 )
+)
+
+
+qtl_lodprofile <- multiqtl_fitqtl2 %>%
+  select(phenotype, refqtl) %>%
+    mutate(
+      df = map(
+        .x = refqtl,
+        .f = ~ .x %>% 
+          attr("lodprofile") %>%
+          map_df(
+            .,
+            .f = ~ as_tibble(., rownames = "marker"), .id = "label"
+            ) %>%
+          mutate(
+            marker = ifelse(!grepl("\\_|\\.", marker),
+                            paste0(
+                              "c", 
+                              as.character(chr), 
+                              ".",
+                              "loc",
+                              as.character(pos)),
+                            marker)
+            )
+        )) %>%
+    unnest(df) %>%
+  select(-c(refqtl))
+
+mapa_base <- scanone_lodplot_df %>% 
+  select(marker, chr, pos, cM, breaks) %>% 
+  distinct
+
+qtl_lodprofile_all <- mapa_base %>%
+  mutate(chr = as_factor(chr)) %>%
+  left_join(qtl_lodprofile) %>%
+  left_join(multiqtl_summary_QTL_all %>%
+              select(phenotype, label, ci.low, ci.high)) %>%
+  filter(!is.na(lod)) %>%
+  mutate(y = pmap_dbl(
+    .l =.,
+    .f = ~ with(
+      list(...),
+      ifelse(between(pos, ci.low, ci.high),
+             lod,
+             0)
+    )
+  )) %>%
+  mutate(alpha = ifelse(y == 0, 0.3, 1))
+
+
+LODprofiles_cM <- qtl_lodprofile_all %>%
+  group_by(phenotype) %>%
+  mutate(color = ifelse( y == 0, "black", "red" )) %>%
+  nest %>%
+  mutate(
+    title = paste0(
+      "multi-qtl LODprofile for ",
+      phenotype)) %>%
+  mutate(plot = map2(
+    .x = data, 
+    .y = title,
+    .f = ~ .x %>%
+      {
         ggplot(
           data =., 
           aes(x = cM, 
               y = lod, 
-              group = interaction(chr, alpha)
+              group = interaction(chr),
+              color = color
           )
           ) +
             geom_line(size = 0.75, alpha = 0.3) +
@@ -1653,17 +2202,8 @@ ion_HUN_lodplots_all <- ion_HUN_lodplot_df %>%
             aes(alpha = alpha),
             size = 0.75
             ) +
-          geom_ribbon(
-            aes(ymin = 0, ymax = y), 
-            fill = "red", 
-            alpha = 0.8
-            ) +
-          geom_hline( 
-            aes(yintercept = unique(threshold)),
-            color = "red",
-            linetype = 2
-            ) +
           scale_alpha_identity() +
+          scale_color_identity() +
           scale_x_continuous(
             name = "chr", 
             breaks = unique(.$breaks), 
@@ -1672,72 +2212,636 @@ ion_HUN_lodplots_all <- ion_HUN_lodplot_df %>%
             theme(
               panel.background = 
                 element_rect(
-                fill = "white",
-                colour = "grey50")) +
-            ggtitle(.y)
+                  fill = "white",
+                  colour = "grey50"
+                  ),
+              text = element_text(size = 20),
+              plot.title = element_text(hjust = 0.5)) +
+      ggtitle(.y)
       }
-    )
-  ) 
+  )) 
 
-
-p <- ion_HUN_lodplots_all$plot
-
-# Saving plots int_addo a single pdf
-ggsave(
-   filename = 
-     "output/plots/scanone_lodplots/ion_HUN_lodplots_all.pdf", 
-   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
-   width = 15, height = 9
-)
-
-# Only significant plots
-ion_HUN_lodplots_signif <- ion_HUN_lodplots_all %>%
-  semi_join(scanone_summary_HUN)
-
-p <- ion_HUN_lodplots_signif$plot
-
-# Saving plots int_addo a single pdf
-ggsave(
-   filename = 
-     "output/plots/scanone_lodplots/ion_HUN_lodplots_signif.pdf", 
-   plot = gridExtra::marrangeGrob(p, nrow=1, ncol=1), 
-   width = 15, height = 9
-)
-
-# all significant plots in the same page
-
-ion_HUN_lodplots_signif <- ion_HUN_lodplots_all %>%
-  semi_join(ion_HUN_lodplots_signif) %>%
-  select(phenotype, data) %>%
-  unnest(data) %>% {
-    ggplot(data =., 
-           aes(x = cM, y = lod, group = interaction(chr, alpha))) +
-      geom_line(size = 0.75, alpha = 0.3) +
-      geom_line(aes(alpha = alpha), size = 0.75) +
-      geom_ribbon(aes(ymin = 0, ymax = y), fill = "red", alpha = 0.8 ) +
-      geom_hline(aes(yintercept = threshold), color = "red",
-                 linetype = 2) +
-      scale_alpha_identity() +
-      scale_x_continuous(name = "chr", 
-                         breaks = unique(.$breaks),
-                         labels = unique(as.character((.$chr)))) +
-  theme(panel.background = element_rect( fill = "white",
-                                         colour = "grey50")) +
-  ggtitle("QTL analysis sig peaks int_additive covariate") +
-  facet_grid(phenotype ~ .)
+bind_rows(
+  qtl_lodprofile_all %>% mutate(model = "multiqtl"),
+  scanone.WT_lodplot_df %>% 
+    mutate(chr = as_factor(chr), model = "WT")) %>%
+  semi_join(., summary_scanone.WT, by = c("phenotype")) %>%
+  group_by(phenotype) %>%
+  mutate(color = ifelse( y == 0 | is.na(y), "black", "red" )) %>%
+  select(phenotype, cM, lod, chr, color, alpha, breaks, model) %>%
+  nest %>%
+  mutate(
+    title = paste0(
+      "multi-qtl LODprofile for ",
+      phenotype)) %>%
+  mutate(plot = map2(
+    .x = data, 
+    .y = title,
+    .f = ~ .x %>%
+      {
+        ggplot(
+          data =., 
+          aes(x = cM, 
+              y = lod, 
+              group = chr,
+              color = color
+          )
+          ) +
+            geom_line(size = 0.75, alpha = 0.3) +
+          geom_line(
+            aes(alpha = alpha),
+            size = 0.75
+            ) +
+          scale_alpha_identity() +
+          scale_color_identity() +
+          scale_x_continuous(
+            name = "chr", 
+            breaks = unique(.$breaks), 
+            labels = unique(as.character((.$chr)))
+            ) +
+            theme(
+              panel.background = 
+                element_rect(
+                  fill = "white",
+                  colour = "grey50"
+                  ),
+              text = element_text(size = 20),
+              plot.title = element_text(hjust = 0.5)) +
+      ggtitle(.y) +
+          facet_grid(model ~ .)
       }
+  )) %>%
+  .$plot %>% 
+  .[[4]]
 
-ggsave(
-   filename =
-     "output/plots/scanone_lodplots/ion_HUN_lodplots_signif.pdf", 
-   plot = ion_HUN_lodplots_signif, 
-   width = 15, 
-   height = 18
-)
+
+
+qtl_lodprofile_wrap <- qtl_lodprofile_all %>%
+  mutate(chr2 = chr) %>%
+  group_by(phenotype, chr2) %>%
+  nest %>%
+  arrange(phenotype, chr2)%>%
+  mutate(plot = map(
+    .x = data,
+    .f = ~ .x %>%
+      ggplot(data =., aes(x = pos, y = lod)) +
+      geom_ribbon(
+        aes(ymin = 0, ymax = y), 
+        fill = "#ff0000", 
+        alpha = 0.6
+        ) + 
+      xlab(NULL) +
+      ylab(NULL) +
+      geom_line(size = 1) +
+      theme(
+        panel.background = element_rect(
+          fill = "white", 
+          colour ="grey50"
+          )) +
+      facet_wrap(. ~ chr)
+  )) %>%
+  group_by(phenotype) %>%
+  summarise(plot = list(plot)) %>%
+  mutate(wrap = map(
+    .x = plot, 
+    .f = ~ patchwork::wrap_plots(
+      .x, 
+      guides = "collect",
+      nrow = 1
+      ) +
+      plot_annotation( 
+        theme = theme(plot.title = element_text(hjust = 0.5)
+                      ) 
+        )
+    )) 
+  
 
 ```
 
+Correlations between traits
+
 ```{r}
+
+reorder_cormat <- function(cormat){
+# Use correlation between variables as distance
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+
+# Get lower triangle of the correlation matrix
+get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+}
+reorder_cormat <- function(cormat){
+# Use correlation between variables as distance
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+  
+
+  
+corr.matrix.WT.leaf <- ionomics_phenotypes %>%
+  mutate(tissue = tolower(tissue)) %>% 
+  filter(hun == "WT" & tissue == "leaf") %>%
+  pivot_wider(names_from = ion, values_from = value) %>%
+  select(-c(id:tissue)) %>%
+  cor(.) %>%
+  round(., 2) %>%
+  get_upper_tri %>%
+  as_tibble(rownames = "ion") %>%
+  pivot_longer(-ion, names_to = "ion2") %>%
+  filter(ion != ion2) %>%
+  filter(!is.na(value)) %>%
+  mutate(hun = "WT")
+
+corr.matrix.HUN.leaf <- ionomics_phenotypes %>%
+  mutate(tissue = tolower(tissue)) %>% 
+  filter(hun == "HUN" & tissue == "leaf") %>%
+  pivot_wider(names_from = ion, values_from = value) %>%
+  select(-c(id:tissue)) %>%
+  cor(., use = "complete.obs") %>%
+  round(., 2) %>%
+  get_upper_tri %>%
+  as_tibble(rownames = "ion") %>%
+  pivot_longer(-ion, names_to = "ion2") %>%
+  filter(ion != ion2) %>%
+  filter(!is.na(value)) %>%
+  mutate(hun = "HUN")
+
+bind_rows(corr.matrix.WT.leaf,
+          corr.matrix.HUN.leaf) %>% 
+  pivot_wider(names_from = hun, values_from = value) %>%
+  mutate(change_sign = WT * HUN) %>%
+  filter(change_sign < 0) %>%
+  arrange(ion)  
+
+
+leaf.corr.matrix <- matrix(NA, nrow = 20, ncol = 20)
+leaf.corr.matrix[upper.tri(leaf.corr.matrix)] <-
+  corr.matrix.WT.leaf[upper.tri(corr.matrix.WT.leaf)]
+
+leaf.corr.matrix[lower.tri(leaf.corr.matrix)] <-
+  corr.matrix.HUN.leaf[lower.tri(corr.matrix.HUN.leaf)]
+
+rownames(leaf.corr.matrix) <-  rownames(corr.matrix.WT.leaf)
+colnames(leaf.corr.matrix) <-  colnames(corr.matrix.WT.leaf)
+
+leaf.corr.matrix %>%
+  ggcorrplot(., hc.order = TRUE, outline.col = "white") +
+  theme(title = element_text(hjust = 0.5)) +
+  scale_y_continuous(sec.axis = dup_axis()) +
+    ggtitle("correlation between elements in WT and HUN families for leaf tissue")
+
+corr.matrix.HUN.leaf %>%
+  as_tibble(rownames = "ion") %>%
+  pivot_longer(names)
+  
+  
+
+  
+  
+
+  reshape2::melt(., na.rm = TRUE) %>%
+  mutate(abs = abs(value)) %>%
+  filter(Var1 != Var2) %>%
+  arrange(desc(abs)) %>%  view
+  ggcorrplot(., hc.order = TRUE, type = "lower",
+     outline.col = "white") %>%
+  
+  melt(., na.rm = TRUE) %>%
+  as_tibble() %>%
+  rename(ion = Var1, ion2 = Var2, r2 = value) %>%
+  ggplot(data = ., aes(ion2, ion, fill = r2))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+
+corr.matrix.WT.seed <- ionomics_phenotypes %>%
+  mutate(tissue = tolower(tissue)) %>% 
+  filter(hun == "WT" & tissue == "seed") %>%
+  pivot_wider(names_from = ion, values_from = value) %>%
+  select(-c(id:tissue)) %>%
+  cor(.) %>%
+  flattenCorrMatrix %>%
+  arrange(row, column)
+
+corr.matrix.HUN.seed <- ionomics_phenotypes %>%
+  mutate(tissue = tolower(tissue)) %>% 
+  filter(hun == "HUN" & tissue == "seed") %>%
+  pivot_wider(names_from = ion, values_from = value) %>%
+  select(-c(id:tissue)) %>%
+  cor(.) %>%
+  flattenCorrMatrix %>%
+  arrange(row, column)
+
+corr.matrix.WT.leaf %>%
+  ggplot(
+    data =., 
+    aes(
+      x = row,
+      y = column,
+      fill = cor)) +
+  geom_tile() +
+  theme(
+      panel.background = element_rect(fill = "white", 
+                                      colour ="grey50"),
+      plot.title = element_text(hjust = 0.5),
+      text = element_text(size=20)
+      )
+```
+
+Probable conditional QTLs (detected in either WT or HUN dataset, but not in the other)
+
+```{r}
+
+summary_scanone.WT %>%
+  mutate(chr = as.integer(chr)) %>%
+  left_join(multiqtl_summary_QTL_all, by = c("phenotype", "chr")) %>% 
+  select(phenotype, sort(names(.))) %>% 
+  select(
+    phenotype,
+    chr, 
+    contains("interval"),
+    matches("^pos\\.(x|y)$|^ci\\.high\\.(x|y)$|^ci\\.low\\.(x|y)$")
+    ) %>%
+  left_join(., ion_pheno.col)
+
+WT_refqtl <- summary_scanone.WT %>%
+  arrange(phenotype, chr) %>%
+  mutate(int = T) %>%
+  prepare_fitqtl_df1 %>%
+  prepare_makeqtl(., ion_crossobject) %>%
+  prepare_refqtl
+
+WT_fitqtl <- WT_refqtl %>%
+  evaluate_fitqtl(., ion_crossobject)
+
+WT_fitqtl_results2 <- bind_rows(
+  WT_fitqtl %>% qtl_fullmodel_df,
+  WT_fitqtl %>% qtl_dropone_df
+  ) %>% 
+  arrange(phenotype, term) 
+
+HUN_refqtl <- summary_scanone.HUN %>%
+  arrange(phenotype, chr) %>%
+  mutate(int = T) %>%
+  prepare_fitqtl_df1 %>%
+  prepare_makeqtl(., ion_crossobject) %>%
+  prepare_refqtl
+
+HUN_fitqtl <- HUN_refqtl %>%
+  evaluate_fitqtl(., ion_crossobject)
+
+HUN_fitqtl_results2 <- bind_rows(
+  HUN_fitqtl %>% qtl_fullmodel_df,
+  HUN_fitqtl %>% qtl_dropone_df
+  ) %>% 
+  arrange(phenotype, term) 
+
+
+write_csv(multiqtl_fitqtl_results2, 
+          paste0(getwd(),
+                 "/output/tables/multiqtl_fitqtl_results.csv"
+                 )
+)
+
+summary_scanone.HUN %>%
+  arrange(phenotype, chr)
+
+scanone.WT.out.hk %>% plot(., lodcolumn = 28)
+plot(.)
+
+
+```
+
+Effectplots in whole set and HUN and WT sets separated
+
+```{r}
+
+genotypes_scheme_color <- c("CML312" = "#e77e39", 
+                            "HET" = "#9a3a28",
+                            "W22" = "#2e1342")
+
+all_qtl_x_efplots_df <- bind_rows(
+  multiqtl_summary_QTL_all  %>% mutate(what = "ALL"), 
+  summary_scanone.WT %>% mutate(what = "WT", chr = as.integer(chr)),
+  summary_scanone.HUN %>% mutate(what = "HUN", chr = as.integer(chr))
+  ) %>%
+  select(phenotype, chr, pos, what) %>%
+  arrange(phenotype, chr) %>%
+  group_by(phenotype, chr) %>%
+  filter(n() == 1 | (n() != 1 & what != "ALL")) %>%
+  ungroup %>%
+  mutate(pos = round(pos, 1)) %>%
+  mutate(qtl = paste0(chr, "@", pos)) %>%
+  left_join(ion_pheno.col)
+  
+
+effectplot_whole.lines <- all_qtl_x_efplots_df %>%
+  mutate(ep = pmap(
+    .l = .,
+    .f = ~ with( 
+      list(...),
+      effectplot(cross = ion_crossobject,
+                 pheno.col = pheno.col, 
+                 mname1 = qtl, 
+                 draw = F)
+      )))
+
+effectplot_HUN <- all_qtl_x_efplots_df %>%
+  filter(!(chr == 5 & between(pos, 0, 5))) %>%
+  mutate(ep = pmap(
+    .l = .,
+    .f = ~ with( 
+      list(...),
+      effectplot(cross = ion_crossobject_HUN,
+                 pheno.col = pheno.col, 
+                 mname1 = qtl, 
+                 draw = F)
+      )))
+
+effectplot_WT <- all_qtl_x_efplots_df %>%
+  filter(!(chr == 5 & between(pos, 0, 5))) %>%
+  mutate(ep = pmap(
+    .l = .,
+    .f = ~ with( 
+      list(...),
+      effectplot(cross = ion_crossobject_WT,
+                 pheno.col = pheno.col, 
+                 mname1 = qtl, 
+                 draw = F)
+      )))
+
+effectplots_all_hun_wt_df <- bind_rows(
+  effectplot_whole.lines %>% mutate(what = "All"),
+  effectplot_HUN %>% mutate(what = "HUN"),
+  effectplot_WT %>% mutate(what = "WT")
+) %>%
+  mutate(ep_df = map( 
+    .x = ep,
+    .f = ~ map_df(.x =., .f = ~enframe(.x), .id = "what") %>%
+      mutate(name = str_extract(name, "[A-Z0-9]{1,}$")) %>%
+      pivot_wider(names_from = what, values_from = value) %>%
+      mutate(name = case_when(name == "CMLCML" ~ "CML312",
+                              name == "CMLW22" ~ "HET",
+                              name == "W22W22" ~ "W22",
+                              T ~ NA_character_)))) %>%
+  select(-ep) %>%
+  unnest(ep_df) 
+
+effectplots_all_hun_wt <- effectplots_all_hun_wt_df %>%
+  mutate(label = paste0(chr, "@", pos)) %>%
+  group_by(what, phenotype, chr, label) %>%
+  nest %>%
+  arrange(phenotype, chr, what) %>%
+  mutate(plot = map2(
+    .x = data,
+    .y = what,
+    .f =  ~regular_effecplots_function(.x, .y) 
+    ))
+
+effectplots_all_hun_wt_wrap <- effectplots_all_hun_wt %>%
+  mutate(what = factor(what, levels = c("HUN", "WT", "All"))) %>%
+  arrange(phenotype, chr, what) %>%
+  group_by(phenotype, chr, label) %>%
+  summarise(plot = list(plot)) %>%
+  mutate(wrap = map(
+    .x = plot, 
+    .f = ~ 
+      wrap_plots(
+        .x, 
+        guides = "collect") +
+      plot_annotation(
+        theme = theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=20)
+                      )
+        )))
+
+effectplot_cov <- all_qtl_x_efplots_df %>%
+  mutate(ep = pmap(
+    .l = .,
+    .f = ~ with( 
+      list(...),
+      effectplot(cross = ion_crossobject, pheno.col = pheno.col, 
+                 mname1 = "5_2269274", mname2 = qtl, draw = F))))
+
+effectplots_cov_df <- effectplot_cov %>%
+  mutate(
+    ep_df = map(
+      .x = ep,
+      .f = ~ map_df(
+        .x =., 
+        .f = ~ as_tibble(.x, rownames = "hun"), 
+        .id = "what") %>%
+  pivot_longer(-c(what, hun)) %>%
+  pivot_wider(names_from = what, values_from = value) %>%
+  filter(!grepl("CMLW22", hun)) %>%
+  mutate(across(c(hun, name), ~ str_extract(., "[A-Z0-9]{1,}$"))) %>%
+  mutate(hun = ifelse(hun == "CMLCML", "WT", "HUN"),
+         name = case_when(name == "CMLCML" ~ "CML312",
+                          name == "CMLW22" ~ "HET",
+                          name == "W22W22" ~ "W22",
+                          T ~ NA_character_)) %>%
+  mutate(hun = factor(hun, levels = c("WT", "HUN"))) 
+  )) %>%
+  select(-ep) %>%
+  unnest(ep_df) 
+
+effectplots_cov <- effectplots_cov_df %>%
+  mutate(label = paste0(chr, "@", pos)) %>%
+  group_by(phenotype, chr, label) %>%
+  nest %>% 
+  mutate(plot = map2(
+    .x = data,
+    .y = "COV",
+    .f = ~ cov_effecplots_function(.x, .y)
+    )) %>%
+  select(-data)
+  
+
+cov_effecplots_function <- function(data, title) {
+  
+  PLOT <- data %>%
+    ggplot(
+    data =., 
+    aes(x = hun, 
+        y = Means,
+        group =  name,
+        color = name
+        )
+    ) +
+  geom_errorbar(
+    aes(
+      ymin = Means - SEs,
+      ymax = Means + SEs
+      ),
+    width = 0.2, 
+    size = 1
+    ) +
+  geom_line(
+    size = 1
+    ) +
+  geom_point(
+    size = 2, 
+    shape = 22, 
+    fill = "white"
+    ) +
+  scale_color_manual(
+    guide = NULL,
+    values = genotypes_scheme_color
+    ) +
+  xlab(NULL) +
+  ylab("ppm") +
+  theme(
+        panel.background = element_rect(
+          fill = "white", 
+          colour ="grey50"
+          ),
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size=20)
+        ) +
+    ggtitle(title) +
+    facet_wrap(. ~ qtl)
+  
+  return(PLOT)
+}
+regular_effecplots_function <- function(data, title) {
+  
+  plot <-  data %>% 
+    ggplot(data =., aes(x = name, y = Means, color = name))  +
+    geom_errorbar(
+      aes(ymin = Means - SEs , ymax = Means + SEs),
+      width = 0.2, 
+      size = 1
+      ) +
+    geom_point(
+      size = 2,
+      shape = 22, 
+      fill = "white"
+      ) +
+    scale_color_manual(
+      name = "Genotype",
+      values = genotypes_scheme_color
+      ) +
+    xlab(NULL) +
+    ylab("ppm") +
+    theme(
+      panel.background = element_rect(
+        fill = "white", 
+        colour ="grey50"),
+      plot.title = element_text(hjust = 0.5),
+      text = element_text(size=20)) +
+    ggtitle(title)
+  return(plot)
+}
+
+effectplots_all_same_y <- effectplots_all_hun_wt %>%
+  mutate(what2 = "all") %>%
+  bind_rows(effectplots_cov %>% mutate(what2 = "cov")) %>%
+  select(-data) %>%
+  arrange(phenotype, chr,  what2) %>%
+  mutate(
+    margenes = map(
+      .x = plot,
+      .f = ~ ggplot_build(.x)$layout$panel_scales_y[[1]]$range$range)
+  ) %>%
+  unnest(margenes) %>%
+  group_by(phenotype, chr) %>%
+  mutate(min = min(margenes),
+         max = max(margenes)) %>%
+  pivot_longer(c(min, max), names_to = NULL) %>%
+  select(-margenes) %>%
+  distinct %>%
+  group_by(phenotype, chr, what, label, plot, what2) %>%
+  summarise(margenes = list(value)) %>%
+  mutate(plot2 = map2(
+    .x = plot, 
+    .y = margenes, 
+    .f = ~ .x + coord_cartesian(ylim = .y))) 
+  
+effectplots_all_patchwork <- effectplots_all_same_y %>%
+  mutate(what = factor(what, levels = c("HUN", "WT", "All"))) %>%
+  arrange(phenotype, chr, what) %>%
+  group_by(phenotype, chr, label, what2) %>%
+  summarise(plot = list(plot2)) %>%
+  mutate(wrap = map(
+    .x = plot, 
+    .f = ~ 
+      wrap_plots(
+        .x, 
+        guides = "collect") +
+      plot_annotation(
+        theme = theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=20)
+                      )
+        )))  %>%
+  select(-plot) %>%
+  pivot_wider(names_from = what2, values_from = wrap) %>%
+  ungroup %>%
+  mutate(patch2 = pmap(
+    .l =.,
+    .f = ~ with(
+      list(...),
+      all + 
+        cov + 
+        plot_layout(guides = "collect", nrow = 1) +
+            plot_annotation( 
+              title = label, 
+              theme = theme(plot.title = element_text(hjust = 0.5),
+                            text = element_text(size=16)
+                            ) 
+              ) &
+            theme(legend.position = "bottom",
+                  text = element_text(size=16))
+    )
+  )) %>%
+  select(phenotype:label, patch2) %>%
+  group_by(phenotype) %>%
+  mutate(n = n()) %>%
+  summarise(patch2 = list(patch2),
+            n = first(n)) %>%
+  mutate(patch3 = pmap(
+    .l = .,
+    .f = ~ with(
+      list(...),
+      wrap_plots(patch2, guides = "collect", nrow = n) +
+        plot_annotation( 
+              title = phenotype, 
+              theme = theme(plot.title = element_text(hjust = 0.5),
+                            text = element_text( size = 20)
+                            ) 
+        
+      ))
+    ))  
+
+p <- effectplots_all_patchwork$patch3
+
+# # create directory for plots
+# dir.create(file.path(paste0(getwd(), "/output/plots"), "effectplots"))
+
+# Saving plots into a single pdf
+pdf("output/plots/effectplots/all_comparisson.pdf",
+    onefile = TRUE,
+    width = 15, 
+    height = 9
+    )
+walk(p, ~ print(.x))
+dev.off()
+
+
 ```
 
 
